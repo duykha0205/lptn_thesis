@@ -155,6 +155,7 @@ class Trans_high(nn.Module):
         mask = self.model(x)
 
         for i in range(self.num_high):
+            # 0 1 2 3 : -4 -3 -2 -1
             mask = nn.functional.interpolate(mask, size=(pyr_original[-2-i].shape[2], pyr_original[-2-i].shape[3]))
             self.trans_mask_block = getattr(self, 'trans_mask_block_{}'.format(str(i)))
             mask = self.trans_mask_block(mask)

@@ -1,2 +1,6 @@
 /datasets
+/experiments
 
+__pycache__/
+/results
+/tb_logger

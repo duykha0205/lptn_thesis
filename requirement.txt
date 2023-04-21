@@ -13,3 +13,6 @@ torch>=1.3
 torchvision
 tqdm
 yapf
+basicsr
+lion-pytorch
+triton
