@@ -1,7 +1,12 @@
 1. Act norm 
-2. swish activation
-3. Lion update gradient 
-4. 
+2. swish activation (SiLU)
+3. SE-Block (attention)
+
+---
+Command linux:
+export PATH=$PATH:./
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONPATH="./:${PYTHONPATH}"
 
 
 -------
@@ -14,4 +19,19 @@
 7. https://arxiv.org/pdf/2205.12952.pdf : pretrained model
 8. Squeeze-and-Excitation Networks : https://arxiv.org/pdf/1709.01507.pdf
 9. https://github.dev/huggingface/pytorch-image-models : code 
-10. 
+10. https://paperswithcode.com/paper/boosting-convolutional-neural-networks-with
+11. https://paperswithcode.com/paper/eca-net-efficient-channel-attention-for-deep
+12. (ACT norm) https://github.dev/CompVis/taming-transformers 
+13. (ACT norm) https://proceedings.neurips.cc/paper_files/paper/2018/file/d139db6a236200b21cc7f752979132d0-Paper.pdf 
+14. (ACT norm) https://github.dev/VincentStimper/normalizing-flows 
+15. 
+
+1. Chạy lại với dataset summer2winter -> nhở hơn chạy nhiều epochh
+2. vẽ lại kiến trúc cải tiến của mình
+3. Giải thích ActNorm
+
+----
+28/5/2023
+1. giải thích SEmodule
+2. FID, KID
+3. Viết Doc

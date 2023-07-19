@@ -9,15 +9,18 @@ datasets:
 
   test:
     name: FiveK_val
-    type: PairedImageDataset
+    type: UnPairedImageDataset
+    # type: PairedImageDataset
+    dataroot_gt: datasets/summer2winter_yosemite/testB
+    dataroot_lq: datasets/summer2winter_yosemite/testA
 #    dataroot_gt: datasets/FiveK/FiveK_480p/test/B
 #    dataroot_lq: datasets/FiveK/FiveK_480p/test/A
-#    io_backend:
-#      type: disk
-    dataroot_gt: datasets/FiveK/FiveK_test_target.lmdb
-    dataroot_lq: datasets/FiveK/FiveK_test_source.lmdb
     io_backend:
-      type: lmdb
+      type: disk
+    # dataroot_gt: datasets/FiveK/FiveK_test_target.lmdb
+    # dataroot_lq: datasets/FiveK/FiveK_test_source.lmdb
+    # io_backend:
+    #   type: lmdb
 
 # network structures
 network_g:
@@ -26,9 +29,13 @@ network_g:
   nrb_high: 3
   num_high: 3
 
+network_d:
+  type: NLayerDiscriminator
+
 # path
 path:
   pretrain_network_g: experiments/pretrained_models/net_g_FiveK_numhigh3.pth
+  # pretrain_network_g: experiments/LPTN_FiveK_archived/LPTN_FiveK/models/net_g_latest.pth
   strict_load_g: false
 
 val:
@@ -36,7 +43,18 @@ val:
   suffix: ~  # add suffix to saved images, if None, use exp name
 
   metrics:
-    psnr: # metric name, can be arbitrary
-      type: calculate_psnr
-      crop_border: 0
-      test_y_channel: false
+    # psnr: # metric name, can be arbitrary
+    #   type: calculate_psnr
+    #   crop_border: 0
+    #   test_y_channel: false
+
+    # ssim: # metric name, can be arbitrary
+    #   type: calculate_ssim
+    #   crop_border: 0
+    #   test_y_channel: false
+
+    # fid: # metric name, can be arbitrary
+      # type: calculate_fretchet
+      # crop_border: 0
+      # test_y_channel: false
+      # model: LPTN
