@@ -1,7 +1,52 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-from codes.models.archs.arch_util import ActNorm, SEModule
+
+def l2normalize(v, eps=1e-12):
+    return v / (v.norm() + eps)
+
+from torch.nn import Parameter
+from codes.models.archs.arch_util import ActNorm
+    
+def make_divisible(v, divisor=8, min_value=None, round_limit=.9):
+    min_value = min_value or divisor
+    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
+    # Make sure that round down does not go down by more than 10%.
+    if new_v < round_limit * v:
+        new_v += divisor
+    return new_v
+
+class SEModule(nn.Module):
+    """ SE Module as defined in original SE-Nets with a few additions
+    Additions include:
+        * divisor can be specified to keep channels % div == 0 (default: 8)
+        * reduction channels can be specified directly by arg (if rd_channels is set)
+        * reduction channels can be specified by float rd_ratio (default: 1/16)
+        * global max pooling can be added to the squeeze aggregation
+        * customizable activation, normalization, and gate layer
+    """
+    def __init__(
+            self, channels, rd_ratio=1. / 16, rd_channels=None, rd_divisor=8, add_maxpool=True,
+            bias=True, act_layer=nn.ReLU, norm_layer=ActNorm, gate_layer='sigmoid'):
+        super(SEModule, self).__init__()
+        self.add_maxpool = add_maxpool
+        if not rd_channels:
+            rd_channels = make_divisible(channels * rd_ratio, rd_divisor, round_limit=0.)
+        self.fc1 = nn.Conv2d(channels, rd_channels, kernel_size=1, bias=bias)
+        self.bn = norm_layer(rd_channels) if norm_layer else nn.Identity()
+        self.act = nn.SiLU()
+        self.fc2 = nn.Conv2d(rd_channels, channels, kernel_size=1, bias=bias)
+        self.gate = nn.Sigmoid()
+
+    def forward(self, x):
+        x_se = x.mean((2, 3), keepdim=True)
+        if self.add_maxpool:
+            # experimental codepath, may remove or change
+            x_se = 0.5 * x_se + 0.5 * x.amax((2, 3), keepdim=True)
+        x_se = self.fc1(x_se)
+        x_se = self.act(self.bn(x_se))
+        x_se = self.fc2(x_se)
+        return x * self.gate(x_se)
     
 class Lap_Pyramid_Bicubic(nn.Module):
     """
@@ -97,23 +142,43 @@ class Trans_low(nn.Module):
 
         model = [
             nn.Conv2d(3, 16, 3, padding=1),
+            # SpectralNorm(nn.Conv2d(3, 16, 3, padding=1)),
+            # nn.InstanceNorm2d(16),
             ActNorm(16),
+            # nn.LeakyReLU(),
             nn.SiLU(),
             nn.Conv2d(16, 64, 3, padding=1),
+            # SpectralNorm(nn.Conv2d(16, 64, 3, padding=1)),
             ActNorm(64),
+            # nn.LeakyReLU()
             nn.SiLU()
             ]
-        
+
+        # for _ in range(num_residual_blocks):
+        #     model += [ResidualBlock(64)]
+            
         for _ in range(num_residual_blocks):
             model += [SEModule(64)]
+
         
+
         model += [
+            # Self_Attn(64,'Silu'),
+            
             nn.Conv2d(64, 16, 3, padding=1),
+            # SpectralNorm(nn.Conv2d(64, 16, 3, padding=1)),
             ActNorm(16),
+            # nn.LeakyReLU(),
             nn.SiLU(),
+            
+            # Self_Attn(16,'Silu'),
+            
             nn.Conv2d(16, 3, 3, padding=1),
+            # SpectralNorm(nn.Conv2d(16, 3, 3, padding=1)),
             ActNorm(3)
             ]
+
+        # model += [Self_Attn(3,'Silu')]
 
         self.model = nn.Sequential(*model)
 
@@ -131,14 +196,20 @@ class Trans_high(nn.Module):
 
         model = [
             nn.Conv2d(9, 64, 3, padding=1),
+            # SpectralNorm(nn.Conv2d(9, 64, 3, padding=1)),
             ActNorm(64),
+            # nn.LeakyReLU()
             nn.SiLU()
             ]
 
+        # for _ in range(num_residual_blocks):
+        #     model += [ResidualBlock_high(64)]
+        
         for _ in range(num_residual_blocks):
             model += [SEModule(64)]
 
         model += [
+            # SpectralNorm(nn.Conv2d(64, 3, 3, padding=1)),
             nn.Conv2d(64, 3, 3, padding=1),
             ActNorm(3),
             ]
@@ -148,9 +219,12 @@ class Trans_high(nn.Module):
         for i in range(self.num_high):
             trans_mask_block = nn.Sequential(
                 nn.Conv2d(3, 16, 1),
+                # SpectralNorm(nn.Conv2d(3, 16, 1)),
                 ActNorm(16),
+                # nn.LeakyReLU(),
                 nn.SiLU(),
                 nn.Conv2d(16, 3, 1),
+                # SpectralNorm(nn.Conv2d(16, 3, 1)),
                 ActNorm(3)
                 )
             setattr(self, 'trans_mask_block_{}'.format(str(i)), trans_mask_block)

@@ -1,8 +1,108 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-from codes.models.archs.arch_util import ActNorm, SEModule
-    
+
+
+def l2normalize(v, eps=1e-12):
+    return v / (v.norm() + eps)
+
+from torch.nn import Parameter
+from codes.models.archs.arch_util import ActNorm
+
+class SpectralNorm(nn.Module):
+    def __init__(self, module, name='weight', power_iterations=1):
+        super(SpectralNorm, self).__init__()
+        self.module = module
+        self.name = name
+        self.power_iterations = power_iterations
+        if not self._made_params():
+            self._make_params()
+
+    def _update_u_v(self):
+        u = getattr(self.module, self.name + "_u")
+        v = getattr(self.module, self.name + "_v")
+        w = getattr(self.module, self.name + "_bar")
+
+        height = w.data.shape[0]
+        for _ in range(self.power_iterations):
+            v.data = l2normalize(torch.mv(torch.t(w.view(height,-1).data), u.data))
+            u.data = l2normalize(torch.mv(w.view(height,-1).data, v.data))
+
+        # sigma = torch.dot(u.data, torch.mv(w.view(height,-1).data, v.data))
+        sigma = u.dot(w.view(height, -1).mv(v))
+        setattr(self.module, self.name, w / sigma.expand_as(w))
+
+    def _made_params(self):
+        try:
+            u = getattr(self.module, self.name + "_u")
+            v = getattr(self.module, self.name + "_v")
+            w = getattr(self.module, self.name + "_bar")
+            return True
+        except AttributeError:
+            return False
+
+
+    def _make_params(self):
+        w = getattr(self.module, self.name)
+
+        height = w.data.shape[0]
+        width = w.view(height, -1).data.shape[1]
+
+        u = Parameter(w.data.new(height).normal_(0, 1), requires_grad=False)
+        v = Parameter(w.data.new(width).normal_(0, 1), requires_grad=False)
+        u.data = l2normalize(u.data)
+        v.data = l2normalize(v.data)
+        w_bar = Parameter(w.data)
+
+        del self.module._parameters[self.name]
+
+        self.module.register_parameter(self.name + "_u", u)
+        self.module.register_parameter(self.name + "_v", v)
+        self.module.register_parameter(self.name + "_bar", w_bar)
+
+
+    def forward(self, *args):
+        self._update_u_v()
+        return self.module.forward(*args)
+
+class Self_Attn(nn.Module):
+    """ Self attention Layer"""
+    def __init__(self,in_dim,activation):
+        super(Self_Attn,self).__init__()
+        self.chanel_in = in_dim
+        self.activation = activation
+        
+        #self.query_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
+        self.query_conv = SpectralNorm(nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1))
+        # self.key_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
+        self.key_conv = SpectralNorm(nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1))
+        # self.value_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
+        self.value_conv = SpectralNorm(nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1))
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+        self.softmax  = nn.Softmax(dim=-1) #
+    def forward(self,x):
+        """
+            inputs :
+                x : input feature maps( B X C X W X H)
+            returns :
+                out : self attention value + input feature 
+                attention: B X N X N (N is Width*Height)
+        """
+        m_batchsize,C,width ,height = x.size()
+        proj_query  = self.query_conv(x).view(m_batchsize,-1,width*height).permute(0,2,1) # B X CX(N)
+        proj_key =  self.key_conv(x).view(m_batchsize,-1,width*height) # B X C x (*W*H)
+        energy =  torch.bmm(proj_query,proj_key) # transpose check
+        attention = self.softmax(energy) # BX (N) X (N) 
+        proj_value = self.value_conv(x).view(m_batchsize,-1,width*height) # B X C X N
+
+        out = torch.bmm(proj_value,attention.permute(0,2,1) )
+        out = out.view(m_batchsize,C,width,height)
+        
+        out = self.gamma*out + x
+        return out
+
+
 class Lap_Pyramid_Bicubic(nn.Module):
     """
 
@@ -90,30 +190,58 @@ class Lap_Pyramid_Conv(nn.Module):
             image = up + level
         return image
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features):
+        super(ResidualBlock, self).__init__()
+
+        self.block = nn.Sequential(
+            # nn.Conv2d(in_features, in_features, 3, padding=1),
+            SpectralNorm(nn.Conv2d(in_features, in_features, 3, padding=1)),
+            # nn.LeakyReLU(),
+            nn.SiLU(),
+            # nn.Conv2d(in_features, in_features, 3, padding=1),
+            SpectralNorm(nn.Conv2d(in_features, in_features, 3, padding=1)),
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
+
 
 class Trans_low(nn.Module):
     def __init__(self, num_residual_blocks):
         super(Trans_low, self).__init__()
 
         model = [
-            nn.Conv2d(3, 16, 3, padding=1),
+            # nn.Conv2d(3, 16, 3, padding=1),
+            SpectralNorm(nn.Conv2d(3, 16, 3, padding=1)),
+            # nn.InstanceNorm2d(16),
             ActNorm(16),
+            # nn.LeakyReLU(),
             nn.SiLU(),
-            nn.Conv2d(16, 64, 3, padding=1),
-            ActNorm(64),
+            # nn.Conv2d(16, 64, 3, padding=1),
+            SpectralNorm(nn.Conv2d(16, 64, 3, padding=1)),
+            ActNorm(16),
+            # nn.LeakyReLU()
             nn.SiLU()
             ]
-        
+
         for _ in range(num_residual_blocks):
-            model += [SEModule(64)]
+            model += [ResidualBlock(64)]
+
         
+
         model += [
-            nn.Conv2d(64, 16, 3, padding=1),
+            # nn.Conv2d(64, 16, 3, padding=1),
+            SpectralNorm(nn.Conv2d(64, 16, 3, padding=1)),
             ActNorm(16),
+            # nn.LeakyReLU(),
             nn.SiLU(),
-            nn.Conv2d(16, 3, 3, padding=1),
-            ActNorm(3)
+            # nn.Conv2d(16, 3, 3, padding=1)
+            SpectralNorm(nn.Conv2d(16, 3, 3, padding=1)),
+            ActNorm(16)
             ]
+
+        model += [Self_Attn(3,'Silu')]
 
         self.model = nn.Sequential(*model)
 
@@ -130,29 +258,27 @@ class Trans_high(nn.Module):
         self.num_high = num_high
 
         model = [
-            nn.Conv2d(9, 64, 3, padding=1),
-            ActNorm(64),
+            # nn.Conv2d(9, 64, 3, padding=1),
+            SpectralNorm(nn.Conv2d(9, 64, 3, padding=1)),
+            # nn.LeakyReLU()
             nn.SiLU()
             ]
 
         for _ in range(num_residual_blocks):
-            model += [SEModule(64)]
+            model += [ResidualBlock(64)]
 
-        model += [
-            nn.Conv2d(64, 3, 3, padding=1),
-            ActNorm(3),
-            ]
+        model += [SpectralNorm(nn.Conv2d(64, 3, 3, padding=1))]
 
         self.model = nn.Sequential(*model)
 
         for i in range(self.num_high):
             trans_mask_block = nn.Sequential(
-                nn.Conv2d(3, 16, 1),
-                ActNorm(16),
+                # nn.Conv2d(3, 16, 1),
+                SpectralNorm(nn.Conv2d(3, 16, 1)),
+                # nn.LeakyReLU(),
                 nn.SiLU(),
-                nn.Conv2d(16, 3, 1),
-                ActNorm(3)
-                )
+                # nn.Conv2d(16, 3, 1))
+                SpectralNorm(nn.Conv2d(16, 3, 1)))
             setattr(self, 'trans_mask_block_{}'.format(str(i)), trans_mask_block)
 
     def forward(self, x, pyr_original, fake_low):
